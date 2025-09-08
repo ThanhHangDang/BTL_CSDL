@@ -1,0 +1,164 @@
+#### Trigger 1: Kiểm tra số lượng sản phẩm trước khi thêm vào giỏ hàng
+####
+DELIMITER $$
+
+CREATE TRIGGER check_product_quantity_before_add
+BEFORE INSERT ON cart_product
+FOR EACH ROW
+BEGIN
+    DECLARE available_quantity INT;
+
+    SELECT Quantity INTO available_quantity
+    FROM product
+    WHERE ProductID = NEW.ProductID;
+
+    IF available_quantity < NEW.Quantity THEN
+        SIGNAL SQLSTATE '45000'
+        SET MESSAGE_TEXT = 'Không đủ số lượng sản phẩm trong kho!';
+    END IF;
+END$$
+
+DELIMITER ;
+###
+Giải thích:
+- Mục đích: Đảm bảo rằng không thể thêm nhiều sản phẩm vào giỏ hàng hơn số lượng có sẵn trong kho.
+- Hoạt động:
++ Trigger được kích hoạt trước khi thêm một dòng mới vào bảng cart_product.
++ Trigger lấy Quantity hiện tại của sản phẩm từ bảng product.
++ Nếu số lượng muốn thêm (NEW.Quantity) lớn hơn số lượng hiện có (available_quantity), trigger sẽ tạo ra lỗi và ngăn việc thêm sản phẩm vào giỏ hàng.
++ Điều này bảo vệ tính toàn vẹn dữ liệu và tránh tình trạng bán vượt quá số lượng.
+
+#########################################################################################################
+#### Trigger 2: Tự động cập nhật số lượng sản phẩm khi sản phẩm được thêm vào giỏ hàng
+####
+DELIMITER $$
+
+CREATE TRIGGER update_quantity_after_add_to_cart
+AFTER INSERT ON cart_product
+FOR EACH ROW
+BEGIN
+    UPDATE product
+    SET Quantity = Quantity - NEW.Quantity
+    WHERE ProductID = NEW.ProductID;
+END$$
+
+DELIMITER ;
+####
+Giải thích:
+- Mục đích: Khi một sản phẩm được thêm vào bảng cart_product, số lượng (Quantity) của sản phẩm trong bảng product sẽ tự động giảm đi số lượng sản phẩm được thêm vào giỏ.
+- Hoạt động:
++ Trigger được kích hoạt sau khi một dòng mới được thêm vào bảng cart_product.
+Dựa vào ProductID và Quantity từ bản ghi mới (NEW), trigger sẽ giảm số lượng của sản phẩm trong bảng product.
++ Điều này đảm bảo rằng số lượng hàng tồn kho luôn được cập nhật chính xác.
+
+############################################################################################################# Trigger 3: Tự động cập nhật trạng thái đơn hàng khi thanh toán thành công\
+####
+DELIMITER $$
+
+CREATE TRIGGER update_order_status_after_payment
+AFTER UPDATE ON orders
+FOR EACH ROW
+BEGIN
+    IF NEW.PaymentStatus = 'Paid' THEN
+        UPDATE orders
+        SET OrderStatus = 'Processing'
+        WHERE OrderID = NEW.OrderID;
+    END IF;
+END$$
+
+DELIMITER ;
+####
+Giải thích:
+- Mục đích: Khi trạng thái thanh toán (PaymentStatus) của một đơn hàng chuyển thành "Paid", trạng thái đơn hàng (OrderStatus) sẽ tự động được cập nhật thành "Processing".
+- Hoạt động:
++ Trigger được kích hoạt sau khi có một bản ghi trong bảng orders được cập nhật.
++ Nếu PaymentStatus mới của đơn hàng là "Paid", trigger sẽ thay đổi OrderStatus thành "Processing".
++ Điều này giúp giảm sai sót và tự động hóa quá trình cập nhật trạng thái đơn hàng.
+
+############################################################################################################# Trigger 4: Xóa tất cả sản phẩm trong giỏ hàng khi xóa giỏ hàng
+####
+DELIMITER $$
+
+CREATE TRIGGER clear_cart_items_before_delete
+BEFORE DELETE ON cart
+FOR EACH ROW
+BEGIN
+    DELETE FROM cart_product
+    WHERE CartID = OLD.CartID;
+END$$
+
+DELIMITER ;
+####
+Giải thích:
+- Mục đích: Khi một giỏ hàng (cart) bị xóa, tất cả các sản phẩm liên quan trong bảng cart_product cũng sẽ bị xóa.
+- Hoạt động:
++ Trigger được kích hoạt trước khi một bản ghi trong bảng cart bị xóa.
++ Trigger sẽ xóa tất cả sản phẩm có liên kết với giỏ hàng đó trong bảng cart_product.
++ Điều này giúp đảm bảo tính toàn vẹn dữ liệu và tránh dữ liệu rác trong bảng cart_product.
+
+#########################################################################################################
+#### Procedure: delete_user
+####
+DELIMITER $$
+
+CREATE PROCEDURE delete_user(
+    IN UserID INT
+)
+BEGIN
+    -- Kiểm tra nếu người dùng tồn tại
+    IF NOT EXISTS (
+        SELECT 1
+        FROM user
+        WHERE user.UserID = UserID
+    ) THEN
+        SIGNAL SQLSTATE '45000'
+        SET MESSAGE_TEXT = "User does not exist.";
+    END IF;
+
+    -- Xóa thông tin liên quan trong bảng address_user
+    DELETE FROM address_user
+    WHERE address_user.UserID = UserID;
+
+    -- Xóa thông tin liên quan trong bảng seller
+    DELETE FROM seller
+    WHERE seller.UserID = UserID;
+
+    -- Xóa thông tin liên quan trong bảng buyer
+    DELETE FROM buyer
+    WHERE buyer.UserID = UserID;
+
+    -- Xóa thông tin liên quan trong bảng cart và cart_product
+    DELETE FROM cart_product
+    WHERE CartID IN (
+        SELECT CartID
+        FROM cart
+        WHERE cart.UserID = UserID
+    );
+    DELETE FROM cart
+    WHERE cart.UserID = UserID;
+
+    -- Xóa thông tin người dùng trong bảng orders
+    DELETE FROM orders
+    WHERE BuyerID = UserID
+    OR SellerID = UserID;
+
+    -- Xóa người dùng trong bảng user
+    DELETE FROM user
+    WHERE user.UserID = UserID;
+END$$
+
+DELIMITER ;
+####
+Giải thích chi tiết
+- Kiểm tra sự tồn tại của người dùng:
+
++ Nếu UserID không tồn tại trong bảng user, phát ra lỗi để thông báo rằng không thể xóa người dùng.
+Xóa các thông tin liên quan:
+
+++ address_user: Xóa tất cả các địa chỉ liên kết với UserID.
+++ seller và buyer: Xóa dữ liệu nếu người dùng là người bán hoặc người mua.
+++ cart và cart_product: Xóa giỏ hàng và các sản phẩm trong giỏ hàng.
+++ orders: Xóa các đơn hàng liên quan nếu người dùng là người mua hoặc người bán.
+Xóa người dùng khỏi bảng user:
+
+- Sau khi tất cả thông tin liên quan đã được xóa, thủ tục sẽ xóa bản ghi người dùng trong bảng user.
